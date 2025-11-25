@@ -1,5 +1,7 @@
 # MailFortress
 
+![MailFortress Banner](https://via.placeholder.com/1200x300/4F46E5/FFFFFF?text=MailFortress+-+AI-Powered+Email+Management)
+
 **A prompt-driven Email Productivity Agent powered by AI**
 
 An intelligent email management system that uses Google's Gemini AI to automatically categorize emails, extract action items, detect spam, and generate draft replies. Built with React, Vite, Supabase, and Express.
