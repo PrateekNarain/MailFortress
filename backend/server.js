@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const cors = require('cors');
 const bodyParser = require('body-parser');
 const fetch = require('node-fetch');
 
@@ -7,6 +8,9 @@ const fetch = require('node-fetch');
 // It intentionally does NOT include any database or Supabase logic.
 
 const app = express();
+
+// Enable CORS for all origins (adjust for production if needed)
+app.use(cors());
 app.use(bodyParser.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3001;

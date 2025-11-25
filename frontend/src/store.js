@@ -3,6 +3,8 @@ import { supabase } from './lib/supabase';
 import { MOCK_INBOX_DATA, DEFAULT_PROMPTS_JSON } from './constants';
 import { formatJsonMailPayload } from './utils/mailFormat';
 
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+
 const EMAILS_TABLE = 'emails';
 const PROMPTS_TABLE = 'prompts';
 
@@ -49,7 +51,7 @@ function inferCategoryFromEmail(email = {}) {
 }
 
 async function callLLMProcess(emailBody, categorizationPrompt, actionItemPrompt, schema) {
-  const res = await fetch('/llm/process-email', {
+  const res = await fetch(`${BACKEND_URL}/llm/process-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ emailBody, categorizationPrompt, actionItemPrompt, schema }),
@@ -59,7 +61,7 @@ async function callLLMProcess(emailBody, categorizationPrompt, actionItemPrompt,
 }
 
 async function callLLMChat(emailBody, chatInstruction, userQuery) {
-  const res = await fetch('/llm/chat', {
+  const res = await fetch(`${BACKEND_URL}/llm/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ emailBody, chatInstruction, userQuery }),
@@ -69,7 +71,7 @@ async function callLLMChat(emailBody, chatInstruction, userQuery) {
 }
 
 async function callLLMDetectSpam(emailBody, subject, fromEmail) {
-  const res = await fetch('/llm/detect-spam', {
+  const res = await fetch(`${BACKEND_URL}/llm/detect-spam`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ emailBody, subject, fromEmail }),

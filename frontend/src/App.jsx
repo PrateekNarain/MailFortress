@@ -179,8 +179,9 @@ export default function App() {
       const email = emails.find(e => e.id === emailId);
       if (!email) throw new Error('Email not found');
 
+      const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
       // Call dedicated LLM endpoint to generate response
-      const response = await fetch('/llm/generate-response', {
+      const response = await fetch(`${BACKEND_URL}/llm/generate-response`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
