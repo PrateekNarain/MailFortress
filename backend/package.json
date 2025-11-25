@@ -1,0 +1,36 @@
+{
+  "name": "mailfortress-backend",
+  "version": "1.0.0",
+  "description": "Backend for MailFortress - lightweight Express API with lowdb and Gemini SDK",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "nodemon server.js",
+    "start:node": "node server.js",
+    "test:connections": "node test_connections.js",
+    "lint": "echo \"No linters configured\"",
+    "test": "echo \"No tests configured\""
+  },
+  "dependencies": {
+    "@google/genai": "latest",
+    "@supabase/supabase-js": "^2.84.0",
+    "body-parser": "latest",
+    "cors": "latest",
+    "dotenv": "^17.2.3",
+    "express": "latest",
+    "lowdb": "latest",
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "nodemon": "latest"
+  },
+  "keywords": [
+    "express",
+    "lowdb",
+    "gemini",
+    "email",
+    "backend"
+  ],
+  "author": "",
+  "license": "MIT"
+}
