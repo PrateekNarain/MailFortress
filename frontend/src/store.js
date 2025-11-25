@@ -1,9 +1,52 @@
 import { create } from 'zustand';
 import { supabase } from './lib/supabase';
 import { MOCK_INBOX_DATA, DEFAULT_PROMPTS_JSON } from './constants';
+import { formatJsonMailPayload } from './utils/mailFormat';
 
 const EMAILS_TABLE = 'emails';
 const PROMPTS_TABLE = 'prompts';
+
+const CATEGORY_RULES = [
+  { label: 'Security', patterns: [/security alert/i, /unusual login/i, /verify your account/i, /password/i, /suspicious/i] },
+  { label: 'Finance', patterns: [/budget/i, /expense/i, /invoice/i, /payroll/i, /bank/i, /tax/i, /w-4/i] },
+  { label: 'Meetings', patterns: [/schedule/i, /meeting/i, /1:?1/i, /review request/i, /availability/i, /book/i] },
+  { label: 'HR & Compliance', patterns: [/hr portal/i, /policy/i, /compliance/i, /form/i] },
+  { label: 'Operations', patterns: [/database/i, /migration/i, /system restart/i, /patch/i, /maintenance/i] },
+  { label: 'Promotions', patterns: [/% off/i, /sale/i, /cart/i, /offer/i, /promotion/i, /discount/i, /newsletter/i, /seo/i] },
+  { label: 'Admin', patterns: [/reminder/i, /action required/i, /follow-up/i, /deadline/i] },
+];
+
+const normalizeDraftArray = (drafts) =>
+  Array.isArray(drafts)
+    ? drafts.map((draft) => ({
+        ...draft,
+        text: formatJsonMailPayload(draft?.text ?? draft),
+      }))
+    : [];
+
+const hydrateEmailRecord = (record) => {
+  if (!record) return record;
+  const drafts = normalizeDraftArray(record.drafts);
+
+  return {
+    ...record,
+    body: formatJsonMailPayload(record.body),
+    spam_reason: formatJsonMailPayload(record.spam_reason),
+    drafts,
+  };
+};
+
+function inferCategoryFromEmail(email = {}) {
+  const haystack = `${email.subject || ''} ${email.body || ''}`;
+  for (const rule of CATEGORY_RULES) {
+    if (rule.patterns.some((regex) => regex.test(haystack))) {
+      return rule.label;
+    }
+  }
+  if (/friend|family|birthday|party/i.test(haystack)) return 'Personal';
+  if (/spam|unsubscribe|lottery/i.test(haystack)) return 'Spam';
+  return 'Inbox';
+}
 
 async function callLLMProcess(emailBody, categorizationPrompt, actionItemPrompt, schema) {
   const res = await fetch('/llm/process-email', {
@@ -40,6 +83,7 @@ export const useStore = create((set, get) => ({
   prompts: [],
   loading: false,
   selectedEmails: [], // For multi-select
+  isAutoProcessing: false,
 
   // Fetch all rows from Supabase tables
   fetchData: async () => {
@@ -56,11 +100,15 @@ export const useStore = create((set, get) => ({
       console.error('fetchData prompts error', promptsRes.error);
     }
 
-    set({
-      emails: emailsRes.data || [],
-      prompts: promptsRes.data || [],
-      loading: false,
-    });
+    const emailsData = (emailsRes.data || []).map(hydrateEmailRecord);
+    set({ emails: emailsData, prompts: promptsRes.data || [], loading: false });
+
+    const { isAutoProcessing } = get();
+    if (!isAutoProcessing && emailsData.length) {
+      get()
+        .autoProcessPending(emailsData)
+        .catch((err) => console.error('autoProcessPending failed', err));
+    }
   },
 
   // Initialize DB with default prompts and mock inbox if empty
@@ -119,7 +167,7 @@ export const useStore = create((set, get) => ({
         id: m.id,
         from_email: m.from,
         subject: m.subject,
-        body: m.snippet || '',
+        body: formatJsonMailPayload(m.snippet || ''),
         inserted_at: new Date().toISOString(),
         category: null,
         action_items: [],
@@ -141,11 +189,11 @@ export const useStore = create((set, get) => ({
         id: m.id ?? String(i + 1),
         from_email: m.from_email || m.from || m.sender || 'unknown',
         subject: m.subject || m.title || '(no subject)',
-        body: m.body || m.snippet || '',
+        body: formatJsonMailPayload(m.body || m.snippet || ''),
         inserted_at: m.inserted_at || m.date || new Date().toISOString(),
         category: m.category || null,
         action_items: m.action_items || [],
-        drafts: m.drafts || [],
+        drafts: normalizeDraftArray(m.drafts),
         processed: !!m.processed,
       }));
       set({ emails: rows });
@@ -199,8 +247,9 @@ export const useStore = create((set, get) => ({
   },
 
   // Process inbox: process unprocessed emails (or provided ids) through LLM and batch update Supabase
-  processInbox: async (emailIds = null) => {
-    set({ loading: true });
+  processInbox: async (emailIds = null, options = {}) => {
+    const { silent = false, skipRefresh = false, forceAll = false } = options;
+    if (!silent) set({ loading: true });
     try {
       // Fetch emails to process
       let emailsToProcess = [];
@@ -209,7 +258,10 @@ export const useStore = create((set, get) => ({
         if (error) throw error;
         emailsToProcess = data || [];
       } else {
-        const { data, error } = await supabase.from(EMAILS_TABLE).select('*').eq('processed', false).limit(50);
+        const query = forceAll
+          ? supabase.from(EMAILS_TABLE).select('*')
+          : supabase.from(EMAILS_TABLE).select('*').eq('processed', false).limit(50);
+        const { data, error } = await query;
         if (error) throw error;
         emailsToProcess = data || [];
       }
@@ -219,12 +271,18 @@ export const useStore = create((set, get) => ({
         try {
           const result = await callLLMProcess(em.body || em.subject || '', null, null, null);
           // Expect result to be JSON with category and action_items
-          const category = result.category || null;
-          const action_items = result.action_items || result.tasks || [];
+          const fallbackCategory = inferCategoryFromEmail(em);
+          const category = (result && result.category) || fallbackCategory;
+          let action_items = [];
+          if (result) {
+            if (Array.isArray(result.action_items)) action_items = result.action_items;
+            else if (result.tasks) action_items = Array.isArray(result.tasks) ? result.tasks : [result.tasks];
+          }
 
           updates.push({ id: em.id, category, action_items, processed: true, processed_at: new Date().toISOString() });
         } catch (err) {
           console.error('processInbox LLM call failed for', em.id, err);
+          updates.push({ id: em.id, category: inferCategoryFromEmail(em), processed: true, processed_at: new Date().toISOString() });
         }
       }
 
@@ -234,44 +292,52 @@ export const useStore = create((set, get) => ({
         if (error) console.error('processInbox upsert error', error);
       }
 
-      // Refresh local store
-      await get().fetchData();
-      set({ loading: false });
+      if (!skipRefresh) {
+        await get().fetchData();
+      }
+      if (!silent) set({ loading: false });
       return updates;
     } catch (err) {
-      set({ loading: false });
+      if (!silent) set({ loading: false });
       console.error('processInbox error', err);
       throw err;
     }
   },
 
   // Chat with agent and optionally save reply as draft to email
-  chatWithAgent: async ({ emailId, chatInstruction, userQuery }) => {
+  chatWithAgent: async ({ emailId, chatInstruction, userQuery, contextBody }) => {
     set({ loading: true });
     try {
-      // Get email body
-      const { data: emailData, error: eErr } = await supabase.from(EMAILS_TABLE).select('*').eq('id', emailId).single();
-      if (eErr) throw eErr;
-
-      const resp = await callLLMChat(emailData.body || '', chatInstruction || '', userQuery);
-      const text = resp.text || resp;
-      const suggestedFollowUps = resp.suggestedFollowUps || [];
-
-      // Append draft to drafts array
-      const currentDrafts = Array.isArray(emailData.drafts) ? emailData.drafts : [];
-      const newDraft = { text, suggestedFollowUps, created_at: new Date().toISOString() };
-      const updatedDrafts = [...currentDrafts, newDraft];
-
-      const { data, error } = await supabase.from(EMAILS_TABLE).update({ drafts: updatedDrafts }).eq('id', emailId).select().single();
-      if (error) {
-        console.error('chatWithAgent update drafts error', error);
-        throw error;
+      let emailData = null;
+      if (emailId) {
+        const { data, error } = await supabase.from(EMAILS_TABLE).select('*').eq('id', emailId).single();
+        if (error) throw error;
+        emailData = data;
       }
 
-      // Refresh local store
-      await get().fetchData();
+      const resp = await callLLMChat(emailData?.body || contextBody || '', chatInstruction || '', userQuery);
+      const draftPayload = resp?.draft?.text ?? resp?.draft ?? resp?.text ?? resp;
+      const text = formatJsonMailPayload(draftPayload);
+      const suggestedFollowUps = resp?.draft?.suggestedFollowUps || resp?.suggestedFollowUps || [];
+
+      const newDraft = { text, suggestedFollowUps, created_at: new Date().toISOString() };
+
+      if (emailData) {
+        const currentDrafts = normalizeDraftArray(emailData.drafts);
+        const updatedDrafts = [...currentDrafts, newDraft];
+        const { data, error } = await supabase.from(EMAILS_TABLE).update({ drafts: updatedDrafts }).eq('id', emailId).select().single();
+        if (error) {
+          console.error('chatWithAgent update drafts error', error);
+          throw error;
+        }
+
+        await get().fetchData();
+        set({ loading: false });
+        return { draft: newDraft, email: data };
+      }
+
       set({ loading: false });
-      return data;
+      return { draft: newDraft, email: null };
     } catch (err) {
       set({ loading: false });
       console.error('chatWithAgent error', err);
@@ -280,8 +346,9 @@ export const useStore = create((set, get) => ({
   },
 
   // Detect spam for a single email or all unprocessed emails using Gemini
-  detectSpam: async (emailIds = null) => {
-    set({ loading: true });
+  detectSpam: async (emailIds = null, options = {}) => {
+    const { silent = false, skipRefresh = false, forceAll = false } = options;
+    if (!silent) set({ loading: true });
     try {
       let emailsToCheck = [];
       if (Array.isArray(emailIds) && emailIds.length) {
@@ -289,14 +356,20 @@ export const useStore = create((set, get) => ({
         if (error) throw error;
         emailsToCheck = data || [];
       } else {
-        // Check all emails without spam_confidence
-        const { data, error } = await supabase.from(EMAILS_TABLE).select('*');
+        const query = forceAll
+          ? supabase.from(EMAILS_TABLE).select('*')
+          : supabase
+              .from(EMAILS_TABLE)
+              .select('*')
+              .or('spam_confidence.is.null,spam_confidence.eq.');
+        const { data, error } = await query;
         if (error) throw error;
         emailsToCheck = data || [];
       }
 
       const updates = [];
       for (const em of emailsToCheck) {
+        if (em.category === 'Sent') continue;
         try {
           const result = await callLLMDetectSpam(em.body || '', em.subject || '', em.from_email || '');
           const isSpam = result.isSpam || false;
@@ -328,12 +401,13 @@ export const useStore = create((set, get) => ({
         if (error) console.error('detectSpam upsert error', error);
       }
 
-      // Refresh local store
-      await get().fetchData();
-      set({ loading: false });
+      if (!skipRefresh) {
+        await get().fetchData();
+      }
+      if (!silent) set({ loading: false });
       return updates;
     } catch (err) {
-      set({ loading: false });
+      if (!silent) set({ loading: false });
       console.error('detectSpam error', err);
       throw err;
     }
@@ -386,6 +460,91 @@ export const useStore = create((set, get) => ({
     if (!selectedEmails.length) return;
     await processInbox(selectedEmails);
     set({ selectedEmails: [] });
+  },
+
+  autoProcessPending: async (emailsData) => {
+    const { isAutoProcessing } = get();
+    if (isAutoProcessing) return;
+
+    const rows = emailsData || get().emails || [];
+    const unprocessedIds = rows.filter((e) => e && !e.processed).map((e) => e.id);
+    const hasSpamConfidenceColumn = rows.some((row) => row && Object.prototype.hasOwnProperty.call(row, 'spam_confidence'));
+    const spamPendingIds = hasSpamConfidenceColumn
+      ? rows
+          .filter((e) => e && (typeof e.spam_confidence === 'undefined' || e.spam_confidence === null))
+          .map((e) => e.id)
+      : [];
+
+    if (!unprocessedIds.length && !spamPendingIds.length) return;
+
+    set({ isAutoProcessing: true });
+    try {
+      if (unprocessedIds.length) {
+        await get().processInbox(unprocessedIds, { silent: true, skipRefresh: true });
+      }
+      if (spamPendingIds.length) {
+        await get().detectSpam(spamPendingIds, { silent: true, skipRefresh: true });
+      }
+      await get().fetchData();
+    } catch (err) {
+      console.error('autoProcessPending error', err);
+    } finally {
+      set({ isAutoProcessing: false });
+    }
+  },
+
+  logSentEmail: async ({ toEmail, subject, body }) => {
+    const payload = {
+      from_email: 'you@mailfortress.app',
+      to_email: toEmail || 'unknown',
+      subject: subject || '(no subject)',
+      body: formatJsonMailPayload(body || ''),
+      category: 'Sent',
+      action_items: [],
+      drafts: [],
+      processed: true,
+      processed_at: new Date().toISOString(),
+      inserted_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase.from(EMAILS_TABLE).insert(payload).select().single();
+    if (error) {
+      console.error('logSentEmail insert error', error);
+      throw error;
+    }
+
+    set((state) => ({ emails: [hydrateEmailRecord(data), ...state.emails] }));
+    return data;
+  },
+
+  importEmailsToDatabase: async (emailsArray) => {
+    if (!Array.isArray(emailsArray) || !emailsArray.length) {
+      throw new Error('No emails to import');
+    }
+
+    const rows = emailsArray.map((m, i) => ({
+      from_email: m.from_email || m.from || m.sender || 'unknown',
+      to_email: m.to_email || m.to || null,
+      subject: m.subject || m.title || '(no subject)',
+      body: m.body || m.snippet || '',
+      category: m.category || null,
+      action_items: Array.isArray(m.action_items) ? m.action_items : [],
+      drafts: Array.isArray(m.drafts) ? m.drafts : [],
+      processed: !!m.processed,
+      spam_confidence: m.spam_confidence || null,
+      spam_reason: m.spam_reason || null,
+      inserted_at: m.inserted_at || m.date || new Date().toISOString(),
+      processed_at: m.processed_at || null,
+    }));
+
+    const { data, error } = await supabase.from(EMAILS_TABLE).insert(rows).select();
+    if (error) {
+      console.error('importEmailsToDatabase insert error', error);
+      throw error;
+    }
+
+    await get().fetchData();
+    return data;
   },
 }));
 

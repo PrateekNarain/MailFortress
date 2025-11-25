@@ -113,6 +113,57 @@ function buildStructuredEmail(data = {}) {
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// Helper: unwrap nested JSON structures and code fences from LLM responses
+function unwrapLLMResponse(text) {
+  if (!text || typeof text !== 'string') return text;
+
+  let current = text.trim();
+  let maxIterations = 5;
+  let iteration = 0;
+
+  while (iteration < maxIterations) {
+    iteration++;
+    const before = current;
+
+    // Strip markdown code fences
+    current = current.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+
+    // Try to parse as JSON and extract text field
+    try {
+      const parsed = JSON.parse(current);
+      
+      // Handle {parts:[{text:"..."}], role:"model"} wrapper
+      if (parsed.parts && Array.isArray(parsed.parts) && parsed.parts.length) {
+        current = parsed.parts.map(p => p.text || '').filter(Boolean).join('\n');
+        continue;
+      }
+
+      // Handle {text: "...", suggestedFollowUps: [...]} structure
+      if (parsed.text) {
+        current = parsed.text;
+        continue;
+      }
+
+      // Handle {content: "..."} structure
+      if (parsed.content) {
+        current = parsed.content;
+        continue;
+      }
+
+      // If we got here and it's still JSON, keep the stringified version
+      break;
+    } catch (e) {
+      // Not JSON or already unwrapped, stop iteration
+      break;
+    }
+
+    // If nothing changed, we're done
+    if (current === before) break;
+  }
+
+  return current;
+}
+
 // Helper: unified Gemini call utility. Tries SDK first, then REST fallback.
 async function callGemini(prompt, options = {}) {
   if (!GENAI_API_KEY) throw new Error('GENAI API key is not set in server environment');
@@ -131,20 +182,36 @@ async function callGemini(prompt, options = {}) {
     // Normalize response to text
     let text = '';
     try {
-      if (resp?.output && Array.isArray(resp.output) && resp.output.length) {
-        // output pieces
+      // Check for candidates array with content parts
+      if (resp?.candidates && resp.candidates.length) {
+        const candidate = resp.candidates[0];
+        if (candidate.content && candidate.content.parts && Array.isArray(candidate.content.parts)) {
+          // Extract text from parts array
+          text = candidate.content.parts
+            .map(part => part.text || '')
+            .filter(Boolean)
+            .join('\n');
+        } else if (candidate.output) {
+          text = candidate.output;
+        } else if (candidate.content) {
+          text = typeof candidate.content === 'string' ? candidate.content : JSON.stringify(candidate.content);
+        } else {
+          text = JSON.stringify(candidate);
+        }
+      } else if (resp?.output && Array.isArray(resp.output) && resp.output.length) {
         text = resp.output.map(o => o.content || o.text || JSON.stringify(o)).join('\n');
-      } else if (resp?.candidates && resp.candidates.length) {
-        text = resp.candidates[0].output ?? resp.candidates[0].content ?? JSON.stringify(resp.candidates[0]);
       } else if (resp?.text) {
         text = resp.text;
       } else {
         text = JSON.stringify(resp).slice(0, 2000);
       }
     } catch (e) {
+      console.error('callGemini: Failed to extract text from response', e);
       text = JSON.stringify(resp).slice(0, 2000);
     }
 
+    // Unwrap any nested JSON/code fences
+    text = unwrapLLMResponse(text);
     return text;
   } catch (sdkErr) {
     // SDK not available or failed; fall back to REST
@@ -255,7 +322,7 @@ app.post('/llm/chat', async (req, res) => {
     const { emailBody, chatInstruction, userQuery } = req.body;
     if (!userQuery) return res.status(400).json({ error: 'userQuery is required' });
 
-    const prompt = `${chatInstruction ? chatInstruction + '\n\n' : ''}Context (email):\n${emailBody || ''}\n\nUser Query:\n${userQuery}\n\nPlease answer concisely and also suggest 2-3 relevant follow-up actions or questions. Return as JSON with fields: "text" (your response) and "suggestedFollowUps" (array of strings).`;
+    const prompt = `${chatInstruction ? chatInstruction + '\n\n' : ''}Context (email):\n${emailBody || ''}\n\nUser Query:\n${userQuery}\n\nImportant: Draft a professional email response in clean prose format. Do not use numbered sections, asterisks for headers, or markdown formatting. Write the email naturally as a single flowing message with proper paragraphs. Return as JSON with fields: "text" (your clean prose email response) and "suggestedFollowUps" (array of 2-3 helpful follow-up questions).`;
 
     const text = await callGemini(prompt, { temperature: 0.2, maxOutputTokens: 1024 });
 

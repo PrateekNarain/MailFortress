@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { StructuredResponsePreview, normalizeResponseText } from './DraftPreview';
 
 const EMAIL_TOPICS = [
   { id: 1, label: 'Schedule a Meeting (Internal/External)' },
@@ -23,11 +24,21 @@ const EMAIL_TOPICS = [
   { id: 20, label: 'Request Informal Catch-Up' },
 ];
 
-export default function EmailAgentChat({ emails = [], onChat }) {
+export default function EmailAgentChat({ emails = [], onChat, onSendEmail }) {
   const [selectedTopic, setSelectedTopic] = useState('');
   const [userQuery, setUserQuery] = useState('');
   const [chatInstruction, setChatInstruction] = useState('');
   const [busy, setBusy] = useState(false);
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [draftText, setDraftText] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [subjectLine, setSubjectLine] = useState('');
+
+  useEffect(() => {
+    if (!draftText) {
+      setSubjectLine(selectedTopic || '');
+    }
+  }, [selectedTopic]);
 
   const run = async () => {
     if (!selectedTopic) return alert('Please select an email topic');
@@ -35,22 +46,16 @@ export default function EmailAgentChat({ emails = [], onChat }) {
     
     setBusy(true);
     try {
-      // Create a synthetic email context with the selected topic
-      const emailContext = {
-        emailId: 'draft-' + Date.now(),
-        subject: selectedTopic,
-        body: `Topic: ${selectedTopic}\n\nDetails: ${userQuery}`
-      };
-      
-      // For actual email processing, we'll use the first available email or create a draft context
-      const targetEmailId = emails.length > 0 ? emails[0].id : null;
-      
-      await onChat({ 
-        emailId: targetEmailId, 
+      const syntheticContext = `Topic: ${selectedTopic}\n\nDetails: ${userQuery}`;
+      const result = await onChat({ 
+        emailId: null,
         chatInstruction: chatInstruction || `Draft an email regarding: ${selectedTopic}`, 
-        userQuery: `${selectedTopic}\n\nDetails:\n${userQuery}` 
+        userQuery: `${selectedTopic}\n\nDetails:\n${userQuery}`,
+        contextBody: syntheticContext,
       });
-      alert('Draft generated successfully! Check Email Detail tab to view.');
+      const cleaned = normalizeResponseText(result?.draft?.text || result?.text || '');
+      setDraftText(cleaned);
+      setSubjectLine(selectedTopic);
     } catch (err) {
       console.error('Chat failed', err);
       alert('Failed to generate draft — see console for details.');
@@ -59,8 +64,37 @@ export default function EmailAgentChat({ emails = [], onChat }) {
     }
   };
 
+  const handleSendDraft = async () => {
+    if (!recipientEmail.trim()) {
+      alert('Please add a recipient email.');
+      return;
+    }
+    if (!draftText.trim()) {
+      alert('Generate or write a draft first.');
+      return;
+    }
+    setIsSending(true);
+    try {
+      await onSendEmail?.({
+        toEmail: recipientEmail.trim(),
+        subject: subjectLine || selectedTopic || 'MailFortress Draft',
+        body: draftText,
+      });
+      alert('Draft sent and saved to Sent folder.');
+      setDraftText('');
+      setUserQuery('');
+      setSelectedTopic('');
+      setRecipientEmail('');
+    } catch (err) {
+      console.error('Failed to send draft', err);
+      alert('Unable to send draft, please try again.');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div>
         <label className="block text-sm font-medium mb-1">
           Select Email Topic <span className="text-red-600">*</span>
@@ -74,6 +108,17 @@ export default function EmailAgentChat({ emails = [], onChat }) {
             <option key={topic.id} value={topic.label}>{topic.label}</option>
           ))}
         </select>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Recipient Email</label>
+        <input
+          type="email"
+          className="mt-1 block w-full p-2 border rounded hover:border-indigo-400 focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+          placeholder="recipient@example.com"
+          value={recipientEmail}
+          onChange={(e) => setRecipientEmail(e.target.value)}
+        />
       </div>
 
       <div>
@@ -110,6 +155,66 @@ export default function EmailAgentChat({ emails = [], onChat }) {
           {busy ? 'Generating...' : 'Generate Draft'}
         </button>
       </div>
+
+      {draftText && (
+        <div className="bg-white border-2 border-indigo-200 rounded-lg p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-indigo-700">Generated Draft</h3>
+            <span className="text-xs text-gray-500">{draftText.length} characters</span>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1">Recipient Email</label>
+              <input
+                type="email"
+                className="w-full p-3 border rounded focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+                value={recipientEmail}
+                onChange={(e) => setRecipientEmail(e.target.value)}
+                placeholder="recipient@example.com"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1">Subject</label>
+              <input
+                type="text"
+                className="w-full p-3 border rounded focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+                value={subjectLine}
+                onChange={(e) => setSubjectLine(e.target.value)}
+                placeholder="Subject line"
+              />
+            </div>
+          </div>
+
+          <div className="bg-indigo-50 border border-indigo-100 rounded p-3 overflow-auto max-h-60">
+            <h4 className="text-xs font-semibold text-indigo-500 tracking-wide uppercase mb-2">Formatted Preview</h4>
+            <StructuredResponsePreview text={draftText} />
+          </div>
+
+          <textarea
+            className="w-full p-3 border rounded focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+            rows={10}
+            value={draftText}
+            onChange={(e) => setDraftText(e.target.value)}
+          />
+
+          <div className="flex justify-end gap-2">
+            <button
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+              onClick={() => setDraftText('')}
+            >
+              Clear
+            </button>
+            <button
+              className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
+              onClick={handleSendDraft}
+              disabled={isSending}
+            >
+              {isSending ? 'Sending...' : 'Send Draft'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

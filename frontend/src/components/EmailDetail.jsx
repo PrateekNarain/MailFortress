@@ -1,10 +1,13 @@
 import React from 'react';
+import { normalizeResponseText } from './DraftPreview';
 
 export default function EmailDetail({ email, refresh }) {
   if (!email) return <div className="text-sm text-gray-500">No email selected.</div>;
 
   const confidencePercent = email.spam_confidence ? Math.round(email.spam_confidence * 100) : null;
   const confidenceTheme = confidencePercent >= 75 ? 'bg-rose-100 text-rose-700' : confidencePercent >= 50 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700';
+  const messageBody = normalizeResponseText(email.body);
+  const spamReason = normalizeResponseText(email.spam_reason);
 
   const formatDate = (value) => {
     if (!value) return null;
@@ -25,6 +28,7 @@ export default function EmailDetail({ email, refresh }) {
             <p className="uppercase text-xs tracking-widest text-indigo-100 mb-2">{email.category || 'Inbox'}</p>
             <h2 className="text-2xl font-semibold leading-tight">{email.subject || '(no subject)'}</h2>
             <p className="text-sm text-indigo-100 mt-1">From {email.from_email || 'unknown sender'}</p>
+            {email.to_email && <p className="text-xs text-indigo-100/80">To {email.to_email}</p>}
             {receivedAt && <p className="text-xs text-indigo-100/80 mt-1">Received {receivedAt}</p>}
           </div>
 
@@ -56,7 +60,7 @@ export default function EmailDetail({ email, refresh }) {
         </div>
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Spam Reason</p>
-          <p className="mt-1 text-sm text-slate-700 min-h-[36px]">{email.spam_reason || 'Not flagged as spam'}</p>
+          <p className="mt-1 text-sm text-slate-700 min-h-[36px]">{spamReason || 'Not flagged as spam'}</p>
         </div>
       </div>
 
@@ -65,7 +69,7 @@ export default function EmailDetail({ email, refresh }) {
           <h3 className="text-lg font-semibold text-slate-900">Message</h3>
         </div>
         <article className="prose prose-slate max-w-none text-slate-700 whitespace-pre-line leading-relaxed">
-          {email.body || '(no body)'}
+          {messageBody || '(no body)'}
         </article>
       </div>
 

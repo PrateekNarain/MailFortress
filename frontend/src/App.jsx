@@ -25,12 +25,15 @@ export default function App() {
     selectAllEmails,
     deselectAllEmails,
     bulkMarkSpam,
-    bulkProcess
+    bulkProcess,
+    logSentEmail,
+    importEmailsToDatabase,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState('inbox'); // inbox | prompts | chat | respond
   const [selectedEmailId, setSelectedEmailId] = useState(null);
   const [mailboxFilter, setMailboxFilter] = useState('inbox'); // all | inbox | spam
+  const [uploadPreview, setUploadPreview] = useState(null); // {emails: [], fileName: ''}
 
   useEffect(() => {
     // Initialize DB (inserts defaults when needed) and refresh data
@@ -47,19 +50,21 @@ export default function App() {
   const filteredEmails = emails.filter(em => {
     if (mailboxFilter === 'all') return true;
     if (mailboxFilter === 'spam') return em.category === 'Spam';
-    if (mailboxFilter === 'inbox') return em.category !== 'Spam';
+    if (mailboxFilter === 'sent') return em.category === 'Sent';
+    if (mailboxFilter === 'inbox') return em.category !== 'Spam' && em.category !== 'Sent';
     return true;
   });
 
   const selectedEmail = emails.find((e) => e.id === selectedEmailId) || null;
   const allMailCount = emails.length;
-  const inboxCount = emails.filter(e => e.category !== 'Spam').length;
+  const inboxCount = emails.filter(e => e.category !== 'Spam' && e.category !== 'Sent').length;
   const spamCount = emails.filter(e => e.category === 'Spam').length;
+  const sentCount = emails.filter(e => e.category === 'Sent').length;
   const allSelected = filteredEmails.length > 0 && filteredEmails.every(e => selectedEmails.includes(e.id));
 
   const onReRunProcessing = async () => {
     try {
-      await processInbox();
+      await processInbox(null, { forceAll: true });
       await fetchData();
     } catch (err) {
       console.error('Re-run processing failed', err);
@@ -97,21 +102,45 @@ export default function App() {
     try {
       const text = await file.text();
       const data = JSON.parse(text);
-      // Expect an array of emails
-      await setEmailsLocal(Array.isArray(data) ? data : [data]);
-      setActiveTab('inbox');
+      const emailsArray = Array.isArray(data) ? data : [data];
+      setUploadPreview({ emails: emailsArray, fileName: file.name });
     } catch (err) {
-      console.error('Failed to load file', err);
-      alert('Failed to parse JSON file.');
+      console.error('Failed to parse JSON file', err);
+      alert('Failed to parse JSON file. Please check the format.');
     }
   };
 
-  const onChat = async ({ emailId, chatInstruction, userQuery }) => {
+  const handleImportToDatabase = async () => {
+    if (!uploadPreview?.emails?.length) return;
     try {
-      await chatWithAgent({ emailId, chatInstruction, userQuery });
-      await fetchData();
+      await importEmailsToDatabase(uploadPreview.emails);
+      alert(`Successfully imported ${uploadPreview.emails.length} email(s) to database.`);
+      setUploadPreview(null);
+      setActiveTab('inbox');
+      setMailboxFilter('all');
+    } catch (err) {
+      console.error('Import failed', err);
+      alert('Failed to import emails to database.');
+    }
+  };
+
+  const onChat = async ({ emailId, chatInstruction, userQuery, contextBody }) => {
+    try {
+      const result = await chatWithAgent({ emailId, chatInstruction, userQuery, contextBody });
+      if (result?.email) await fetchData();
+      return result;
     } catch (err) {
       console.error('chatWithAgent failed', err);
+      throw err;
+    }
+  };
+
+  const onSendEmail = async ({ toEmail, subject, body }) => {
+    try {
+      await logSentEmail({ toEmail, subject, body });
+    } catch (err) {
+      console.error('logSentEmail failed', err);
+      throw err;
     }
   };
 
@@ -207,6 +236,44 @@ export default function App() {
       <main className="app-container px-0 py-6">
         {loading && <div className="mb-4 flex justify-center"><Loading /></div>}
 
+        {/* Upload Preview Modal */}
+        {uploadPreview && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-2xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+              <div className="p-6 border-b flex justify-between items-center">
+                <h2 className="text-xl font-semibold">📥 Import Emails Preview</h2>
+                <button onClick={() => setUploadPreview(null)} className="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+              </div>
+              <div className="p-6 overflow-auto flex-1">
+                <div className="mb-4">
+                  <p className="text-sm text-gray-600">File: <span className="font-semibold">{uploadPreview.fileName}</span></p>
+                  <p className="text-sm text-gray-600">Found: <span className="font-semibold">{uploadPreview.emails.length}</span> email(s)</p>
+                </div>
+                <div className="space-y-3 max-h-96 overflow-auto">
+                  {uploadPreview.emails.slice(0, 10).map((email, idx) => (
+                    <div key={idx} className="border rounded p-3 bg-gray-50">
+                      <div className="font-medium text-sm">{email.subject || email.title || '(no subject)'}</div>
+                      <div className="text-xs text-gray-600">From: {email.from_email || email.from || email.sender || 'unknown'}</div>
+                      {email.category && <div className="text-xs text-indigo-600 mt-1">Category: {email.category}</div>}
+                    </div>
+                  ))}
+                  {uploadPreview.emails.length > 10 && (
+                    <div className="text-xs text-gray-500 text-center">...and {uploadPreview.emails.length - 10} more</div>
+                  )}
+                </div>
+              </div>
+              <div className="p-6 border-t flex justify-end space-x-3">
+                <button onClick={() => setUploadPreview(null)} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300">
+                  Cancel
+                </button>
+                <button onClick={handleImportToDatabase} className="px-6 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">
+                  Import to Database
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="card overflow-hidden shadow-lg">
           <div className="md:flex main-panel" style={{ minHeight: '75vh' }}>
             {/* LEFT SIDEBAR */}
@@ -220,9 +287,6 @@ export default function App() {
                   📤 Upload JSON
                   <input type="file" accept="application/json" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
                 </label>
-                <button className="w-full btn-ghost mb-2" onClick={() => initializeData()}>
-                  🔄 Initialize DB
-                </button>
                 <button onClick={onReRunProcessing} className="w-full btn-ghost mb-2">
                   ⚙️ Re-run LLM Processing
                 </button>
@@ -250,6 +314,12 @@ export default function App() {
                   className={`flex justify-between items-center px-3 py-2 rounded cursor-pointer transition ${mailboxFilter === 'spam' ? 'bg-red-50 text-red-700 font-semibold' : 'hover:bg-gray-100'}`}>
                   <span>🚫 Spam</span>
                   <span className="text-sm">{spamCount}</span>
+                </div>
+                <div 
+                  onClick={() => setMailboxFilter('sent')}
+                  className={`flex justify-between items-center px-3 py-2 rounded cursor-pointer transition ${mailboxFilter === 'sent' ? 'bg-green-50 text-green-700 font-semibold' : 'hover:bg-gray-100'}`}>
+                  <span>📤 Sent</span>
+                  <span className="text-sm">{sentCount}</span>
                 </div>
               </div>
 
@@ -348,7 +418,7 @@ export default function App() {
               {activeTab === 'chat' && (
                 <div>
                   <h3 className="text-lg font-semibold mb-3">💬 Agent Chat</h3>
-                  <EmailAgentChat emails={emails} onChat={onChat} />
+                  <EmailAgentChat emails={emails} onChat={onChat} onSendEmail={onSendEmail} />
                 </div>
               )}
 
@@ -366,7 +436,7 @@ export default function App() {
               {activeTab === 'respond' && (
                 <div>
                   <h3 className="text-lg font-semibold mb-3">📨 Generate Email Response</h3>
-                  <EmailRespond emails={emails} onGenerateResponse={onGenerateResponse} />
+                  <EmailRespond emails={emails} onGenerateResponse={onGenerateResponse} onSendEmail={onSendEmail} />
                 </div>
               )}
             </section>

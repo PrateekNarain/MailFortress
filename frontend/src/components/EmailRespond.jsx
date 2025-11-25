@@ -1,96 +1,22 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { normalizeResponseText, StructuredResponsePreview } from './DraftPreview';
 
-const normalizeResponseText = (text = '') => {
-  return text
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .map((line) => line.trimEnd())
-    .map((line) => line.replace(/^[\s\t]*([*•-])\s+/, '- '))
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-};
-
-function StructuredResponsePreview({ text }) {
-  if (!text) return null;
-
-  const blocks = [];
-  let listItems = [];
-
-  const flushList = () => {
-    if (!listItems.length) return;
-    blocks.push({ type: 'list', key: `list-${blocks.length}`, items: listItems });
-    listItems = [];
-  };
-
-  text.split('\n').forEach((rawLine, idx) => {
-    const line = rawLine.trim();
-    const isBullet = /^-\s+/.test(line);
-    const headingMatch = line.match(/^\*\*(.+?)\*\*\s*(.*)$/);
-
-    if (isBullet) {
-      listItems.push({ key: `li-${idx}`, text: line.replace(/^-\s+/, '') });
-      return;
-    }
-
-    flushList();
-
-     if (headingMatch) {
-      const [, headingText, trailing] = headingMatch;
-      blocks.push({ type: 'heading', key: `heading-${idx}`, text: headingText.trim(), trailing: trailing.trim() });
-      return;
-    }
-
-    if (line) {
-      blocks.push({ type: 'p', key: `p-${idx}`, text: line });
-    } else {
-      blocks.push({ type: 'spacer', key: `sp-${idx}` });
-    }
-  });
-
-  flushList();
-
-  return (
-    <div className="space-y-3 text-sm text-gray-800">
-      {blocks.map((block) => {
-        if (block.type === 'p') {
-          return (
-            <p key={block.key} className="leading-relaxed">
-              {block.text}
-            </p>
-          );
-        }
-        if (block.type === 'heading') {
-          return (
-            <div key={block.key} className="text-xs font-semibold tracking-wide text-indigo-600 uppercase">
-              {block.text}
-              {block.trailing ? <span className="block normal-case text-gray-700 text-sm mt-1">{block.trailing}</span> : null}
-            </div>
-          );
-        }
-        if (block.type === 'list') {
-          return (
-            <ul key={block.key} className="list-disc pl-5 space-y-1">
-              {block.items.map((item) => (
-                <li key={item.key}>{item.text}</li>
-              ))}
-            </ul>
-          );
-        }
-        return <div key={block.key} className="h-2" />;
-      })}
-    </div>
-  );
-}
-
-export default function EmailRespond({ emails = [], onGenerateResponse }) {
+export default function EmailRespond({ emails = [], onGenerateResponse, onSendEmail }) {
   const [selectedEmailId, setSelectedEmailId] = useState('');
   const [generatedResponse, setGeneratedResponse] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [recipientEmail, setRecipientEmail] = useState('');
 
   const selectedEmail = emails.find(e => e.id === selectedEmailId);
+
+  useEffect(() => {
+    if (selectedEmail) {
+      setRecipientEmail(selectedEmail.from_email || '');
+    } else {
+      setRecipientEmail('');
+    }
+  }, [selectedEmailId, selectedEmail]);
 
   const handleGenerate = async () => {
     if (!selectedEmailId) {
@@ -111,21 +37,55 @@ export default function EmailRespond({ emails = [], onGenerateResponse }) {
     }
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!generatedResponse.trim()) {
       alert('Please generate or write a response before sending');
       return;
     }
 
+    if (!recipientEmail.trim()) {
+      alert('Please provide the recipient email');
+      return;
+    }
+
     setIsSending(true);
-    // Simulate sending email
-    setTimeout(() => {
-      alert(`Email response sent successfully!\n\nTo: ${selectedEmail?.from_email}\nRe: ${selectedEmail?.subject}`);
+    try {
+      await onSendEmail?.({
+        toEmail: recipientEmail.trim(),
+        subject: selectedEmail ? `Re: ${selectedEmail.subject}` : 'MailFortress Draft',
+        body: generatedResponse,
+      });
+      alert('Email response sent successfully!');
       setGeneratedResponse('');
       setSelectedEmailId('');
+    } catch (err) {
+      console.error('Failed to log sent email', err);
+      alert('Failed to send email. See console for details.');
+    } finally {
       setIsSending(false);
-    }, 1000);
+    }
   };
+          <div className="grid md:grid-cols-2 gap-3 mt-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1">Recipient Email</label>
+              <input
+                type="email"
+                className="w-full p-3 border rounded focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+                value={recipientEmail}
+                onChange={(e) => setRecipientEmail(e.target.value)}
+                placeholder="recipient@example.com"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1">Subject</label>
+              <input
+                type="text"
+                className="w-full p-3 border rounded focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+                value={selectedEmail ? `Re: ${selectedEmail.subject || ''}` : selectedEmail?.subject || ''}
+                disabled
+              />
+            </div>
+          </div>
 
   const handleCopy = () => {
     if (!generatedResponse) return;
