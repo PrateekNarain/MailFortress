@@ -3,9 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Development Content Security Policy (tightened): allow backend, Supabase, and HMR websocket connections -->
-    <!-- NOTE: This CSP relaxes style-src for local development to allow Vite and runtime style injection. Remove or tighten for production. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://localhost:3001 ws: https://*.supabase.co https://*.supabase.internals.supabase.co; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+    <!-- Content Security Policy: allow backend (localhost + Render), Supabase, and HMR websocket connections -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://localhost:3001 https://*.onrender.com ws: wss: https://*.supabase.co https://*.supabase.internals.supabase.co; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
     <title>MailFortress Agent</title>
   </head>
   <body>

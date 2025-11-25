@@ -9,8 +9,37 @@ const fetch = require('node-fetch');
 
 const app = express();
 
-// Enable CORS for all origins (adjust for production if needed)
-app.use(cors());
+// Enable CORS for production (allow Vercel frontend)
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'https://mailfortress.vercel.app',
+  'https://*.vercel.app'
+];
+
+app.use(cors({
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    // Check if origin matches allowed list or wildcard pattern
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (allowed.includes('*')) {
+        const pattern = allowed.replace('*.', '');
+        return origin.endsWith(pattern);
+      }
+      return origin === allowed;
+    });
+    
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+}));
+
 app.use(bodyParser.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3001;
