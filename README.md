@@ -1,6 +1,6 @@
 # MailFortress
 
-![MailFortress Banner](https://via.placeholder.com/1200x300/4F46E5/FFFFFF?text=MailFortress+-+AI-Powered+Email+Management)
+![MailFortress Banner](https://github.com/PrateekNarain/MailFortress/blob/master/Images/Mailfortrees.png)
 
 **A prompt-driven Email Productivity Agent powered by AI**
 
