@@ -4,6 +4,10 @@
 
 An intelligent email management system that uses Google's Gemini AI to automatically categorize emails, extract action items, detect spam, and generate draft replies. Built with React, Vite, Supabase, and Express.
 
+🌐 **Live Demo:**
+- **Frontend:** https://mailfortress.vercel.app
+- **Backend API:** https://mailfortress.onrender.com
+
 ---
 
 ## 🎯 Features
