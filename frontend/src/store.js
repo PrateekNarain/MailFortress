@@ -3,7 +3,8 @@ import { supabase } from './lib/supabase';
 import { MOCK_INBOX_DATA, DEFAULT_PROMPTS_JSON } from './constants';
 import { formatJsonMailPayload } from './utils/mailFormat';
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+// Use environment variable for backend URL, fallback to proxy path for local dev
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.MODE === 'production' ? '' : '');
 
 const EMAILS_TABLE = 'emails';
 const PROMPTS_TABLE = 'prompts';
